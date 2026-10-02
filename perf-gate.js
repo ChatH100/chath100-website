@@ -23,27 +23,43 @@
   var W = window, D = document;
 
   /* ---------- 可调参数 ----------
-     阈值调参依据（实测踩过的坑）：
+     判据目标：**流畅的给完整版，有一点卡的给精简版**。
+     所以阈值是按"能否稳住 60fps"划的，不是按"能不能跑"划的。
+
+     调参依据（实测踩过的坑）：
        门禁执行时页面正在解析 HTML、跑脚本、加载样式表，首帧抖动很大。
        早期参数（丢弃 2 帧 / 预算 150ms / 阈值 13ms）会把 RTX 5060 这类
        好设备也误判成弱设备——实测报出 slow:22.2ms/8f。
-       所以：多丢几帧热身、把预算放宽让测量覆盖多一点时间、
-       阈值提到只可能拦住真正持续掉帧的设备。
+       改成"多丢热身帧 + 放长窗口"后，实测稳态 5.5~5.6ms，判定稳定。
+
      调参方向：
-       想更保守（更多设备走完整版）-> 把 slowFrameMs 调到 26~30
-       想更激进（更多设备走精简版）-> 调到 18 左右
-       宁可完全不错杀 -> 把 slowFrameMs 设成 999，只用硬性判据（低内存/软件渲染） */
+       想更保守（更少设备走精简版）-> slowFrameMs 调到 20~24
+       想更激进（更多设备走精简版）-> 调到 15 左右
+       想完全不错杀 -> slowFrameMs 设成 999，只用硬性判据 */
   var CFG = {
-    frameBudgetMs: 400,   // 采样时长；配合下面 minFrames 决定何时收口
-    hardCapMs: 600,       // 硬上限，超过就用已有样本直接判，绝不拖长首屏
-    warmupFrames: 6,      // 丢弃前几帧（含解析/样式计算/首帧初始化）
-    minFrames: 14,        // 尽量凑够这么多帧再判
-    minFramesOk: 8,       // 至少这么多帧才敢下"弱"的结论
-    slowFrameMs: 20.0,    // 中位帧时超过它才算弱（约 <50fps 持续掉帧）
-    slowRatio: 0.35,      // 慢帧（>33ms）占比超过它才算弱
-    minCores: 2,          // 逻辑核心数低于此值判为弱设备
-    minMemoryGB: 2,       // deviceMemory 低于此值判为弱设备
-    liteSuffix: '-lite'   // index.html -> index-lite.html
+    frameBudgetMs: 500,    // 采样时长
+    hardCapMs: 700,        // 硬上限，超过就用已有样本判，绝不拖长首屏
+    warmupFrames: 8,       // 丢弃前几帧（解析/样式计算/首帧初始化都在这段）
+    minFrames: 16,         // 尽量凑够这么多帧再判
+    minFramesOk: 10,       // 至少这么多帧才敢下"弱"的结论
+
+    /* 流畅度判据：60Hz 下一帧 16.7ms。
+       median > 16.8ms 说明连最简单的绘制都稳不住 60fps —— 那这个页面的
+       全特效（大半径模糊 + 混合模式 + 粒子）必然明显掉帧，直接给精简版。
+       p90 > 33ms 说明有可感知的卡顿尖峰，同样给精简版。
+       两项都是"或"的关系：任一超标即判弱。 */
+    slowFrameMs: 16.8,
+    p90FrameMs: 33.0,
+
+    /* 高分辨率惩罚：像素越多，模糊和合成的开销按面积增长。
+       1600x900 ≈ 1.44MP 为基准，超过 3.5 倍（约 5MP，对应 2560x1440 以上）
+       时把阈值收紧，因为这类屏幕上的全特效明显更吃力。 */
+    hiDpiPixels: 3500000,
+    hiDpiTighten: 0.82,    // 收紧系数：阈值乘以它
+
+    minCores: 4,           // 逻辑核心数低于此值判为弱设备
+    minMemoryGB: 4,        // deviceMemory 低于此值判为弱设备
+    liteSuffix: '-lite'    // index.html -> index-lite.html
   };
 
   /* ---------- 工具 ---------- */
@@ -106,6 +122,7 @@
 
   /* ---------- 3. 硬件基本盘 ---------- */
   try {
+    // 双核及以下的机器跑这套全特效必然不流畅
     if (navigator.hardwareConcurrency && navigator.hardwareConcurrency < CFG.minCores) {
       goLite('cores:' + navigator.hardwareConcurrency); return;
     }
@@ -133,8 +150,36 @@
   if (/swiftshader|software|llvmpipe|basic render/i.test(renderer)) {
     goLite('software-renderer:' + renderer); return;
   }
-  if (/GMA\s?(3|4|5|6|9|X)|HD Graphics (2|3|4|5)000|Mali-4|Adreno \(TM\) [123]|PowerVR SGX|Vivante/i.test(renderer)) {
-    goLite('old-gpu:' + renderer); return;
+
+  /* 明确撑不住全特效的核显 / 老独显。
+     注意 Intel 的命名：HD Graphics 后面跟 4 位数字（如 5500 = Broadwell 2015），
+     UHD Graphics 后面跟 3 位（如 620 = Skylake 2015）。这两代跑本页全特效
+     的大半径模糊会明显掉帧，直接给精简版。 */
+  if (/SwiftShader|llvmpipe|Software Adapter/i.test(renderer)) { goLite('software:' + renderer); return; }
+  if (/HD Graphics\s*(2|3|4|5|6)\d{3}/i.test(renderer)) { goLite('old-igpu-4digit:' + renderer); return; }   // HD 2000~6999
+  if (/UHD Graphics\s*(5|6)\d{2}\b/i.test(renderer)) { goLite('old-igpu-uhd:' + renderer); return; }        // UHD 5xx / 6xx
+  if (/GMA\s?(3|4|5|6|9|X)|Mali-[34]\d{2}|Adreno\s*\(TM\)\s*[123]\d{2}|PowerVR SGX|Vivante/i.test(renderer)) {
+    goLite('ancient-gpu:' + renderer); return;
+  }
+  if (/Intel.*(HD|UHD) Graphics (500|505|510|515|520|530|540|600|605|610|615|620|630)\b/i.test(renderer)) {
+    goLite('weak-igpu:' + renderer); return;
+  }
+
+  /* 像素量：模糊与合成的开销按面积增长。
+     高分辨率屏上同一张页面要处理多得多的像素，全特效更容易卡。 */
+  var pixels = 0;
+  try {
+    var w = (W.screen && W.screen.width) || W.innerWidth || 0;
+    var h = (W.screen && W.screen.height) || W.innerHeight || 0;
+    var dpr = W.devicePixelRatio || 1;
+    pixels = w * h * dpr * dpr;
+  } catch (e) { pixels = 0; }
+
+  /* 只有一块"还行的" GPU 却在驱动很高分辨率的屏，也要按弱处理：
+     例如 4K 屏（约 8.3MP × dpr²）用中端核显，全特效必然吃力。 */
+  if (pixels > CFG.hiDpiPixels * 2 &&
+      /Intel|UHD|HD Graphics|Vega|Radeon.*Graphics/i.test(renderer)) {
+    goLite('hidpi-igpu:' + Math.round(pixels / 1e6) + 'MP:' + renderer); return;
   }
 
   /* ---------- 5. 帧耗时微基准 ---------- */
@@ -172,11 +217,26 @@
     cleanup();
     // 样本不足就不下"弱"的结论 —— 宁可让弱设备多跑一次完整版，也不误伤好设备
     if (frames.length < CFG.minFramesOk) { goFull(); return; }
+
     var sorted = frames.slice().sort(function (a, b) { return a - b; });
-    var median = sorted[Math.floor(sorted.length / 2)];
-    var slowRatio = frames.filter(function (x) { return x > 33.4; }).length / frames.length;
-    if (median > CFG.slowFrameMs && slowRatio > CFG.slowRatio) {
-      goLite('slow:' + median.toFixed(1) + 'ms/' + frames.length + 'f');
+    var n = sorted.length;
+    var median = sorted[Math.floor(n / 2)];
+    var p90 = sorted[Math.min(n - 1, Math.floor(n * 0.9))];
+
+    // 高分辨率屏收紧阈值：同样的笔触在更多像素上更吃力
+    var thresh = CFG.slowFrameMs;
+    var p90thresh = CFG.p90FrameMs;
+    if (pixels > CFG.hiDpiPixels) {
+      thresh = thresh * CFG.hiDpiTighten;
+      p90thresh = p90thresh * CFG.hiDpiTighten;
+    }
+
+    /* 判据：稳不住 60fps（median 超标）**或**存在可感知卡顿尖峰（p90 超标）。
+       目标是"流畅给完整版、有一点卡给精简版"，所以两项取"或"。 */
+    if (median > thresh) {
+      goLite('not-smooth:' + median.toFixed(1) + 'ms/' + n + 'f');
+    } else if (p90 > p90thresh) {
+      goLite('stutter-p90:' + p90.toFixed(1) + 'ms/' + n + 'f');
     } else {
       goFull();
     }
