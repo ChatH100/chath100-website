@@ -109,6 +109,22 @@
         </section>
 
       </div>
+
+      <!-- 管理员面板：连上数据库、且地址栏带 #admin 时才显示（见 talk.js 的 syncAdminPanel） -->
+      <aside class="gb-admin glass" id="gbAdmin" hidden>
+        <h2 class="gb-form-title">管理员</h2>
+        <p class="gb-admin-hint">
+          密码在服务端比对，连错 3 次会锁定 8 分钟。这里只能<strong>清空全部留言</strong>，
+          不能删单条 —— 单条只有发帖人凭本机密钥能删。
+        </p>
+        <label class="gb-label" for="gbAdminToken">管理员密码</label>
+        <input class="gb-input" id="gbAdminToken" name="admin-token" type="password"
+               autocomplete="off" spellcheck="false" />
+        <div class="gb-form-foot">
+          <button class="btn btn-ghost gb-admin-clear" id="gbAdminClear" type="button">清空全部留言</button>
+        </div>
+        <p class="gb-msg" id="gbAdminMsg" role="status" aria-live="polite"></p>
+      </aside>
     </div>
   </section>
 </main>

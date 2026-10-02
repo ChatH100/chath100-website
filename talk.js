@@ -197,8 +197,13 @@
   const emptyEl  = $('#gbEmpty');
   const totalEl  = $('#gbCount');
   const noticeEl = $('#storageNotice');
+  const adminEl    = $('#gbAdmin');
+  const tokenEl    = $('#gbAdminToken');
+  const clearEl    = $('#gbAdminClear');
+  const adminMsgEl = $('#gbAdminMsg');
 
   let Store = LocalStore;
+  let adminToken = '';
 
   /* ---------- 小工具 ---------- */
   function newId() {
@@ -218,6 +223,19 @@
   function setMsg(text, isError) {
     msgEl.textContent = text || '';
     msgEl.classList.toggle('is-error', Boolean(isError));
+  }
+
+  function setAdminMsg(text, isError) {
+    if (!adminMsgEl) return;
+    adminMsgEl.textContent = text || '';
+    adminMsgEl.classList.toggle('is-error', Boolean(isError));
+  }
+
+  /* 面板只在「连上了数据库」且「地址栏带 #admin」时出现。
+     普通访客看不到它；本地存储模式下也不会出现（那种模式没有服务端可管）。 */
+  function syncAdminPanel() {
+    if (!adminEl) return;
+    adminEl.hidden = !(Store.name === 'remote' && window.location.hash === '#admin');
   }
 
   function markInvalid(el, hint) {
@@ -379,6 +397,53 @@
   textEl.addEventListener('input', () => { updateCounter(); clearInvalid(textEl); });
   nameEl.addEventListener('input', () => clearInvalid(nameEl));
 
+  /* ---------- 管理员：清空全部 ----------
+     走 Supabase 的 RPC，密码在服务端比对后才执行删除。
+     前端拿不到任何表结构，也读不到密码哈希。 */
+  async function handleClearAll() {
+    adminToken = tokenEl ? tokenEl.value : '';
+
+    if (Store.name !== 'remote') {
+      setAdminMsg('当前没连上数据库，无法清空。', true);
+      return;
+    }
+    if (!adminToken) {
+      setAdminMsg('先填管理员密码。', true);
+      if (tokenEl) tokenEl.focus();
+      return;
+    }
+
+    let n = 0;
+    try { n = (await Store.list()).length; } catch (err) { /* 读不到就按 0 算 */ }
+
+    if (!window.confirm('确定要永久删除全部 ' + n + ' 条留言吗？此操作无法撤销。')) return;
+
+    if (clearEl) clearEl.disabled = true;
+    try {
+      const res = await fetch(SUPABASE.url + '/rest/v1/rpc/clear_all_messages', {
+        method: 'POST',
+        headers: sbHeaders(),
+        body: JSON.stringify({ p_token: adminToken }),
+      });
+      if (!res.ok) throw new Error(await readError(res));
+
+      const deleted = await res.json();
+      setAdminMsg('已删除 ' + (typeof deleted === 'number' ? deleted : n) + ' 条', false);
+      await render();
+    } catch (err) {
+      console.warn(err);
+      setAdminMsg('清空失败：' + err.message, true);
+    } finally {
+      if (clearEl) clearEl.disabled = false;
+    }
+  }
+
+  if (tokenEl) {
+    tokenEl.addEventListener('input', () => { adminToken = tokenEl.value; });
+  }
+  if (clearEl) clearEl.addEventListener('click', handleClearAll);
+  window.addEventListener('hashchange', syncAdminPanel);
+
   /* ---------- 探测后端 ----------
      配了 Supabase 就用它；探不通（网络不通 / RLS 没配好 / 浏览器不支持）
      就退回浏览器本地存储，页面照样能用。 */
@@ -414,6 +479,7 @@
     updateNotice();
     await detectBackend();
     updateNotice();
+    syncAdminPanel();      // 必须在 detectBackend 之后，否则不知道是不是连上了
     await render();
   })();
 })();
