@@ -255,12 +255,12 @@
     if (Store.name === 'remote') {
       noticeEl.className = 'notice notice-ok';
       noticeEl.textContent =
-        '已连接数据库：留言保存在 Supabase 上，所有访客都能看到。' +
-        '「删除」只能删你自己发的那几条（密钥存在本机浏览器里，服务器上只有哈希）。';
+        '已连接服务器：所有访客都能看到。' +
+        '「删除」只能删你自己发的那几条。';
     } else {
       noticeEl.className = 'notice';
       noticeEl.textContent =
-        '这一版是本地存储：留言只存在你自己浏览器里，别人看不到。' +
+        '未连接到服务器，别人看不到。' +
         '连不上数据库时会自动退回这个模式。';
     }
   }
