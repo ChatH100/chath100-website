@@ -1,0 +1,99 @@
+# ============================================================================
+#  Supabase 保活
+#
+#  这个工作流做两件事：
+#
+#   ① 每天请求一次 Supabase 数据库，让它保持「有活动」。
+#      Supabase 免费项目连续 7 天没有数据库请求会被自动暂停。
+#
+#   ② 大约每 40 天往仓库提交一个时间戳文件。
+#      GitHub 会因为「仓库 60 天没有活动」而自动停掉定时任务，
+#      （原文：scheduled workflows are disabled automatically when there
+#        has been no repository activity for 60 days）
+#      必须有真实的仓库活动，这个定时任务才能一直活着。
+#
+#  为什么不用配置密钥：
+#      下面那个 key 是 Supabase 的 anon key，本来就公开写在 talk.js 里，
+#      任何人都能看到。它只能读留言、按删除密钥删自己那条，
+#      删不了别人的、也读不到密码哈希 —— 权限全由数据库的 RLS 策略控制。
+#
+#  手动测试：仓库 → Actions → 左侧「保活」→ Run workflow
+# ============================================================================
+
+name: 保活
+
+on:
+  schedule:
+    # 每天 UTC 03:17 = 北京时间 11:17。
+    # 故意避开整点：GitHub 的定时任务在整点排队严重，可能延迟很久。
+    - cron: '17 3 * * *'
+  workflow_dispatch:          # 允许在 Actions 页面手动触发
+
+permissions:
+  contents: write             # 提交保活标记需要写权限
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 拉取仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0      # 完整历史，方便下面 rebase
+
+      # ------------------------------------------------------------------
+      # ① 叫醒 Supabase
+      # ------------------------------------------------------------------
+      - name: 请求一次 Supabase
+        run: |
+          set -euo pipefail
+          URL="https://qgyoopcpfrbemifqyjsj.supabase.co/rest/v1/messages?select=id&limit=1"
+          KEY="sb_publishable_pbdWRr0JDgPyYpBYw0bXzQ_K49w5i12"
+
+          CODE=$(curl -sS -o /tmp/resp.txt -w '%{http_code}' \
+                   -H "apikey: ${KEY}" \
+                   -H "Authorization: Bearer ${KEY}" \
+                   "${URL}")
+
+          echo "HTTP ${CODE}"
+          cat /tmp/resp.txt; echo
+
+          if [ "${CODE}" != "200" ]; then
+            echo "::error::Supabase 保活请求失败，HTTP ${CODE}"
+            exit 1
+          fi
+          echo "✓ Supabase 有响应，本次活动已记录"
+
+      # ------------------------------------------------------------------
+      # ② 防 GitHub 60 天后停掉定时任务
+      # ------------------------------------------------------------------
+      - name: 需要时提交保活标记
+        run: |
+          set -euo pipefail
+          FILE=".github/keepalive.txt"
+          NOW=$(date -u +%s)
+
+          LAST=0
+          if [ -f "$FILE" ]; then
+            LAST=$(date -u -d "$(cat "$FILE")" +%s 2>/dev/null || echo 0)
+          fi
+
+          AGE=$(( (NOW - LAST) / 86400 ))
+          echo "距上次仓库活动标记：${AGE} 天（GitHub 的上限是 60 天）"
+
+          if [ "${AGE}" -lt 40 ]; then
+            echo "还没到 40 天，跳过提交"
+            exit 0
+          fi
+
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > "$FILE"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$FILE"
+          git commit -m "chore: 保活标记 $(date -u +%Y-%m-%d)"
+          git pull --rebase --autostash
+          git push
+
+          echo "✓ 已提交，仓库活动计数重置"
