@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="description" content="ChatH100 的留言板 —— 留个名字，写几句话。" />
+<meta name="theme-color" content="#05060f" />
+<title>留言板 · ChatH100</title>
+<link rel="icon" type="image/png" href="img/favicon.png" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<a class="skip-link" href="#main">跳到主要内容</a>
+
+<!-- ============ 动态背景（结构和 index.html 一致） ============ -->
+<div class="backdrop" aria-hidden="true">
+  <span class="aurora aurora-1"></span>
+  <span class="aurora aurora-2"></span>
+
+  <span class="depth" data-depth="30">
+    <span class="blob blob-1"></span>
+    <span class="blob blob-2"></span>
+  </span>
+  <span class="depth" data-depth="15">
+    <span class="blob blob-3"></span>
+  </span>
+
+  <span class="grid-lines"><span class="grid-drift"></span></span>
+  <span class="scan-beam"></span>
+
+  <canvas class="particles" id="particles"></canvas>
+
+  <span class="noise"></span>
+</div>
+
+<!-- 留言板不播开场动画（每次跳页都播会很烦） -->
+<div class="cursor-ball" id="cursorBall" aria-hidden="true"></div>
+
+<!-- ============ 顶部导航 ============ -->
+<header class="nav" id="nav">
+  <div class="nav-inner glass">
+    <a class="brand" href="index.html">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <span class="brand-text">ChatH100</span>
+    </a>
+
+    <nav class="nav-links" id="navLinks" aria-label="主导航">
+      <a href="index.html">首页</a>
+      <a href="index.html#about">关于</a>
+      <a href="talk.html" class="is-active" aria-current="page">交流</a>
+      <a href="index.html#contact">联系</a>
+    </nav>
+
+    <button class="nav-toggle" id="navToggle" type="button"
+            aria-label="打开菜单" aria-expanded="false" aria-controls="navLinks">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+</header>
+
+<main id="main" class="page-main">
+  <section class="section">
+    <div class="container">
+
+      <header class="section-head reveal">
+        <p class="section-kicker">Guestbook</p>
+        <h1 class="section-title">留言板</h1>
+        <p class="section-sub">留个名字，写几句话。不用注册，也不查邮箱。</p>
+      </header>
+
+      <!-- 这段文字会被 talk.js 按实际连接状态覆盖，这里只是没跑 JS 时的兜底 -->
+      <p class="notice reveal" id="storageNotice">
+        <strong>正在连接数据库……</strong>连上之后，留言所有访客都能看到。
+      </p>
+
+      <div class="gb-grid">
+
+        <!-- ---------- 写留言 ---------- -->
+        <form class="gb-form glass reveal" id="gbForm" novalidate>
+          <h2 class="gb-form-title">写一条</h2>
+
+          <label class="gb-label" for="gbName">昵称</label>
+          <input class="gb-input" id="gbName" name="name" type="text"
+                 maxlength="20" placeholder="怎么称呼你？"
+                 autocomplete="nickname" required />
+
+          <label class="gb-label" for="gbText">留言</label>
+          <textarea class="gb-textarea" id="gbText" name="text" rows="5"
+                    maxlength="300" placeholder="说点什么……" required></textarea>
+
+          <div class="gb-form-foot">
+            <span class="gb-counter" id="gbCounter">0 / 300</span>
+            <button class="btn btn-primary" type="submit">发布</button>
+          </div>
+
+          <p class="gb-msg" id="gbMsg" role="status" aria-live="polite"></p>
+        </form>
+
+        <!-- ---------- 留言列表 ---------- -->
+        <section class="gb-list-wrap glass reveal" aria-labelledby="gbListTitle">
+          <div class="gb-list-head">
+            <h2 class="gb-form-title" id="gbListTitle">大家的留言</h2>
+            <span class="gb-count" id="gbCount">0 条</span>
+          </div>
+
+          <p class="gb-empty" id="gbEmpty">还没有人说话，第一条留给你。</p>
+          <ul class="gb-list" id="gbList"></ul>
+        </section>
+
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="container footer-inner">
+    <p>© <span id="year">2026</span> ChatH100</p>
+    <p class="footer-note">手写 HTML / CSS / JavaScript，没有框架。</p>
+  </div>
+</footer>
+
+<script src="script.js"></script>
+<script src="talk.js"></script>
+</body>
+</html>
