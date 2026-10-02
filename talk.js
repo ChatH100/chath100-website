@@ -427,8 +427,16 @@
       });
       if (!res.ok) throw new Error(await readError(res));
 
-      const deleted = await res.json();
-      setAdminMsg('已删除 ' + (typeof deleted === 'number' ? deleted : n) + ' 条', false);
+      // 函数返回 jsonb：成功 {ok:true,deleted:N}，失败 {ok:false,error:"..."}
+      // ⚠️ 密码错、被锁定这些「业务失败」也是 HTTP 200，必须看 ok 字段，
+      //    不能只看状态码 —— 否则会把「密码错误」当成「清空成功 0 条」。
+      const data = await res.json();
+      if (!data || data.ok !== true) {
+        setAdminMsg((data && data.error) || '清空失败：服务端没有返回预期结果', true);
+        return;
+      }
+
+      setAdminMsg('已删除 ' + data.deleted + ' 条', false);
       await render();
     } catch (err) {
       console.warn(err);
