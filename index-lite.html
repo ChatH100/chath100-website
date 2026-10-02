@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-lite>
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="description" content="ChatH100 的个人主页 —— 一个喜欢计算机的人，写点东西。" />
+<meta name="theme-color" content="#05060f" />
+<title>ChatH100 · 喜欢计算机的人（精简版）</title>
+<link rel="icon" type="image/png" href="img/favicon.png" />
+<script src="perf-gate.js"></script>
+<link rel="stylesheet" href="styles.css?v=3" />
+<link rel="stylesheet" href="styles-lite.css" />
+</head>
+<body>
+
+<a class="skip-link" href="#main">跳到主要内容</a>
+
+<!-- ============ 动态背景（纯 CSS + canvas，无图片） ============
+     四层叠加，从下到上：
+       1. 极光     两层反向缓慢旋转的锥形渐变
+       2. 光斑     按 data-depth 分层，随光标产生视差
+       3. 网格     缓缓流动 + 一道扫描光束
+       4. 粒子      canvas 星网
+     开关在 script.js 顶部的 BG 配置里，不想要哪层把对应项改成 false。
+-->
+<div class="backdrop" aria-hidden="true">
+
+  <!-- 1. 极光 -->
+  <span class="aurora aurora-1"></span>
+  <span class="aurora aurora-2"></span>
+
+  <!-- 2. 视差光斑（data-depth 越大，跟光标位移越明显） -->
+  <span class="depth" data-depth="30">
+    <span class="blob blob-1"></span>
+    <span class="blob blob-2"></span>
+  </span>
+  <span class="depth" data-depth="15">
+    <span class="blob blob-3"></span>
+  </span>
+
+  <!-- 3. 流动网格 + 扫描光束 -->
+  <span class="grid-lines"><span class="grid-drift"></span></span>
+  <span class="scan-beam"></span>
+
+  <!-- 4. 粒子星网 -->
+  <canvas class="particles" id="particles"></canvas>
+
+  <span class="noise"></span>
+</div>
+
+<!-- ============ 开场分屏（你原有的设计，已重做配色） ============ -->
+<div class="intro-overlay" id="introOverlay" aria-hidden="true">
+  <div class="intro-panel left"></div>
+  <div class="intro-panel right"></div>
+  <div class="intro-mark" id="introMark">C</div>
+</div>
+
+<!-- ============ 自定义光标 ============ -->
+<div class="cursor-ball" id="cursorBall" aria-hidden="true"></div>
+
+<!-- ============ 顶部导航 ============ -->
+<header class="nav" id="nav">
+  <div class="nav-inner glass">
+    <a class="brand" href="#hero">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <span class="brand-text">ChatH100</span>
+    </a>
+
+    <nav class="nav-links" id="navLinks" aria-label="主导航">
+      <a href="#about">关于</a>
+      <a href="talk-lite.html">交流</a>
+      <a href="#contact">联系</a>
+    </nav>
+
+    <button class="nav-toggle" id="navToggle" type="button"
+            aria-label="打开菜单" aria-expanded="false" aria-controls="navLinks">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+</header>
+
+<main id="main">
+
+  <!-- ============ 首屏 ============ -->
+  <section class="hero" id="hero">
+    <div class="container hero-grid">
+
+      <div class="hero-copy">
+        <p class="badge glass-soft reveal">
+          <span class="pulse" aria-hidden="true"></span>喜欢计算机
+        </p>
+
+        <h1 class="hero-title reveal">ChatH100</h1>
+
+        <p class="hero-role reveal">喜欢计算机的人 · 个人博客</p>
+
+        <p class="hero-tagline reveal">喵~</p>
+
+        <p class="hero-desc reveal">
+          这里放我没什么用但挺好玩的想法。
+        </p>
+
+        <div class="hero-cta reveal">
+          <a class="btn btn-primary" href="talk-lite.html">在线跟我聊天</a>
+          <a class="btn btn-ghost" href="#about">关于我</a>
+        </div>
+      </div>
+
+      <!-- 头像卡片：img/avatar.jpg 是 480x480；想换图就替换它或改这里的 src，见 img/README.md -->
+      <aside class="profile-card glass reveal" aria-label="个人名片">
+        <div class="avatar-wrap">
+          <span class="avatar-fallback" aria-hidden="true">C</span>
+          <img class="avatar" src="img/avatar.jpg" alt="ChatH100 的头像"
+               width="480" height="480" loading="eager" decoding="async" />
+          <span class="avatar-ring" aria-hidden="true"></span>
+        </div>
+
+        <h2 class="profile-name">ChatH100</h2>
+        <p class="profile-role">喜欢计算机的人</p>
+        <p class="profile-tagline">喵~</p>
+
+        <ul class="chip-row" aria-label="标签">
+          <li class="chip">在读</li>
+          <li class="chip">写点东西</li>
+          <li class="chip">慢慢来</li>
+        </ul>
+
+        <ul class="social-row" aria-label="社交链接">
+          <!-- 把 href 换成你的真实地址 -->
+          <li><a class="icon-btn" href="https://github.com/ChatH100" target="_blank" rel="noopener noreferrer" title="GitHub" aria-label="GitHub">GH</a></li>
+          <li><a class="icon-btn" href="mailto:ChatH100@163.com" title="邮箱" aria-label="邮箱">@</a></li>
+        </ul>
+      </aside>
+
+    </div>
+  </section>
+
+  <!-- ============ 关于 ============ -->
+  <section class="section" id="about">
+    <div class="container">
+      <header class="section-head reveal">
+        <p class="section-kicker">About</p>
+        <h2 class="section-title">关于我</h2>
+        <p class="section-sub">一个顺手写点代码的人。</p>
+      </header>
+
+      <div class="about-grid">
+        <article class="about-card glass reveal">
+          <h3>我是谁</h3>
+          <!-- 这段是你自己的介绍，随便改 -->
+          <p>
+            我是 ChatH100，一个喜欢计算机的人。日常在课业和一堆想做的事之间来回横跳，
+            这个站点是我用来整理的。
+          </p>
+          <p>
+            目前主要折腾建模和UE。
+          </p>
+        </article>
+
+        <article class="about-card glass reveal">
+          <h3>现在在做</h3>
+          <ul class="dot-list">
+            <li>把这个博客慢慢填满</li>
+            <li>补前端基础，少抄多写</li>
+            <li>创作大世界游戏</li>
+          </ul>
+        </article>
+
+        <article class="about-card glass reveal">
+          <h3>会一点</h3>
+          <ul class="chip-row wrap" aria-label="技能">
+            <li class="chip">HTML</li>
+            <li class="chip">CSS</li>
+            <li class="chip">JavaScript</li>
+            <li class="chip">Python</li>
+            <li class="chip">C语言</li>
+            <li class="chip">Markdown</li>
+            <li class="chip">Git</li>
+          </ul>
+          <p class="muted-note">都是「会一点」，离「熟练」还有距离。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 联系 ============ -->
+  <section class="section" id="contact">
+    <div class="container">
+      <header class="section-head reveal">
+        <p class="section-kicker">Contact</p>
+        <h2 class="section-title">找我</h2>
+        <p class="section-sub">四个都是真地址，欢迎来找我。</p>
+      </header>
+
+      <div class="contact-grid">
+        <a class="contact-card glass reveal" href="https://qm.qq.com/q/XvSjktImwU"
+           target="_blank" rel="noopener noreferrer">
+          <span class="contact-label">QQ</span>
+          <span class="contact-value">点击加好友</span>
+        </a>
+        <a class="contact-card glass reveal" href="mailto:ChatH100@163.com">
+          <span class="contact-label">邮箱</span>
+          <span class="contact-value">ChatH100@163.com</span>
+        </a>
+        <a class="contact-card glass reveal" href="https://github.com/ChatH100"
+           target="_blank" rel="noopener noreferrer">
+          <span class="contact-label">GitHub</span>
+          <span class="contact-value">github.com/ChatH100</span>
+        </a>
+        <!-- 你给的是短链 https://b23.tv/Y0rAzRw，它 302 到 m.bilibili.com/space/3493142846245227。
+             短链是分享用的、带追踪参数，也可能失效，所以这里写规范主页地址。 -->
+        <a class="contact-card glass reveal" href="https://space.bilibili.com/3493142846245227"
+           target="_blank" rel="noopener noreferrer">
+          <span class="contact-label">Bilibili</span>
+          <span class="contact-value">点击访问主页</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<a class="lite-badge" href="index.html?full=1"
+   title="切换到完整特效版">精简版 <b>·</b> 切回完整版</a>
+
+<footer class="footer">
+  <div class="container footer-inner">
+    <p>© <span id="year">2026</span> ChatH100</p>
+    <p class="footer-note">手写 HTML / CSS / JavaScript，没有框架。</p>
+  </div>
+</footer>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="script-lite.js"></script>
+</body>
+</html>

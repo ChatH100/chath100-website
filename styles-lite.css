@@ -1,0 +1,148 @@
+/* ==========================================================================
+   styles-lite.css —— 低性能设备的合成降级层
+   用法：只在精简版页面里，于 styles.css 之后加载。
+        配合 <html data-lite> 生效，所以对完整版零影响。
+
+   为什么用"覆盖"而不是另抄一份样式：
+     styles.css 有 1100 行版式，另抄一份必然与它逐渐走偏。
+     这里只覆盖"贵"的部分（模糊、毛玻璃、混合模式、常驻图层），
+     版式、配色、组件全部继承原文件——精简版和完整版长得一样。
+
+   降级依据（Windows GPU Engine 计数器实测）：
+     原始页 GPU 3D 占用 42%（稳定 40–46%），持续重压会让 GeForce 驱动
+     报 FECS 固件异常并触发 GPU 复位，表现为整机卡死甚至 0x133 蓝屏。
+     精简版的目标：把背景合成压到接近静止画面。
+   ========================================================================== */
+
+/* ---------- 背景：不再用"模糊 + 混合"造氛围，改成静态渐变 ---------- */
+html[data-lite] .backdrop {
+  background:
+    radial-gradient(1100px 780px at 12% -8%, rgba(119, 35, 255, 0.20), transparent 62%),
+    radial-gradient(950px 700px at 88% 4%, rgba(0, 92, 255, 0.18), transparent 62%),
+    radial-gradient(900px 900px at 50% 112%, rgba(34, 211, 238, 0.10), transparent 62%),
+    linear-gradient(180deg, #070818 0%, var(--bg) 45%, #04050d 100%);
+}
+
+/* 极光：整层是一张 165vmax 的大模糊图层，直接停掉 */
+html[data-lite] .aurora {
+  display: none !important;
+}
+
+/* 光斑：blur(90px) 的取样半径 180px，是填充率大户 */
+html[data-lite] .blob {
+  filter: none !important;
+  will-change: auto !important;
+}
+
+/* 扫描光束：整条就是一层模糊 */
+html[data-lite] .scan-beam {
+  display: none !important;
+}
+
+/* 噪点：feTurbulence 光栅化 + overlay 全屏混合 */
+html[data-lite] .noise {
+  display: none !important;
+}
+
+/* 流动网格：元素放大到 200%（4 倍视口面积）持续位移 */
+html[data-lite] .grid-drift {
+  animation: none !important;
+}
+
+/* 视差层：每帧改 transform，弱设备上不划算 */
+html[data-lite] .depth {
+  will-change: auto !important;
+}
+
+/* 粒子 canvas：每帧整屏 clearRect + 重绘 */
+html[data-lite] .particles {
+  display: none !important;
+}
+
+/* ---------- 毛玻璃：背景已是大面积平滑渐变，去掉后观感几乎不变 ---------- */
+html[data-lite] .glass,
+html[data-lite] .glass-soft,
+html[data-lite] .nav-inner,
+html[data-lite] .panel,
+html[data-lite] .card {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+html[data-lite] .glass,
+html[data-lite] .glass-soft {
+  background: rgba(12, 14, 30, 0.86);
+}
+
+/* ---------- 常驻显存：一律取消提升 ---------- */
+html[data-lite] .blob,
+html[data-lite] .aurora,
+html[data-lite] .grid-drift,
+html[data-lite] .scan-beam,
+html[data-lite] .noise,
+html[data-lite] .depth {
+  will-change: auto !important;
+}
+
+/* ---------- 无限动画：只保留不影响合成的那些 ---------- */
+/* pulse 靠 box-shadow，ring 靠 transform，二者都不产生大面积模糊，保留 */
+html[data-lite] .blob,
+html[data-lite] .grid-drift,
+html[data-lite] .scan-beam {
+  animation: none !important;
+}
+
+/* 开场分屏：弱设备上直接跳过，省掉一次全屏合成突变 */
+html[data-lite] .intro-overlay {
+  display: none !important;
+}
+
+/* 自定义光标跟随：持续 rAF + transform */
+html[data-lite] .cursor-ball {
+  display: none !important;
+}
+
+/* ---------- 动效统一缩短 ---------- */
+html[data-lite] .reveal {
+  transition-duration: 0.25s !important;
+  transition-property: opacity, transform !important;
+}
+html[data-lite] .reveal {
+  transform: none !important;   /* 不做位移，只淡入 */
+}
+
+/* ---------- 精简版标识（右下角小徽标，便于你和用户确认当前版本） ---------- */
+html[data-lite] .lite-badge {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 11px;
+  font: 500 12px/1.2 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  color: #cfd6ff;
+  background: rgba(12, 14, 30, 0.9);
+  border: 1px solid rgba(120, 140, 255, 0.28);
+  border-radius: 999px;
+  text-decoration: none;
+  opacity: 0.85;
+}
+html[data-lite] .lite-badge:hover {
+  opacity: 1;
+  border-color: rgba(120, 140, 255, 0.55);
+}
+html[data-lite] .lite-badge b {
+  font-weight: 700;
+  color: #8fa4ff;
+}
+
+/* ---------- 尊重系统"减少动效"偏好时，进一步停掉所有动画 ---------- */
+@media (prefers-reduced-motion: reduce) {
+  html[data-lite] *,
+  html[data-lite] *::before,
+  html[data-lite] *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

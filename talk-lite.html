@@ -1,14 +1,15 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-lite>
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="description" content="ChatH100 的留言板 —— 留个名字，写几句话。" />
 <meta name="theme-color" content="#05060f" />
-<title>留言板 · ChatH100</title>
+<title>留言板 · ChatH100（精简版）</title>
 <link rel="icon" type="image/png" href="img/favicon.png" />
 <script src="perf-gate.js"></script>
 <link rel="stylesheet" href="styles.css?v=3" />
+<link rel="stylesheet" href="styles-lite.css" />
 </head>
 <body>
 
@@ -41,16 +42,16 @@
 <!-- ============ 顶部导航 ============ -->
 <header class="nav" id="nav">
   <div class="nav-inner glass">
-    <a class="brand" href="index.html">
+    <a class="brand" href="index-lite.html">
       <span class="brand-dot" aria-hidden="true"></span>
       <span class="brand-text">ChatH100</span>
     </a>
 
     <nav class="nav-links" id="navLinks" aria-label="主导航">
-      <a href="index.html">首页</a>
-      <a href="index.html#about">关于</a>
-      <a href="talk.html" class="is-active" aria-current="page">交流</a>
-      <a href="index.html#contact">联系</a>
+      <a href="index-lite.html">首页</a>
+      <a href="index-lite.html#about">关于</a>
+      <a href="talk-lite.html" class="is-active" aria-current="page">交流</a>
+      <a href="index-lite.html#contact">联系</a>
     </nav>
 
     <button class="nav-toggle" id="navToggle" type="button"
@@ -130,6 +131,9 @@
   </section>
 </main>
 
+<a class="lite-badge" href="index.html?full=1"
+   title="切换到完整特效版">精简版 <b>·</b> 切回完整版</a>
+
 <footer class="footer">
   <div class="container footer-inner">
     <p>© <span id="year">2026</span> ChatH100</p>
@@ -137,7 +141,7 @@
   </div>
 </footer>
 
-<script src="script.js?v=3"></script>
+<script src="script-lite.js"></script>
 <script src="talk.js?v=3"></script>
 </body>
 </html>
