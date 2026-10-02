@@ -1120,3 +1120,44 @@ code {
 .btn::after          { height: 6px; }   /* 上浮 2px，余量 4px */
 .icon-btn::after     { height: 7px; }   /* 上浮 3px，余量 4px */
 .contact-card::after { height: 9px; }   /* 上浮 5px，余量 4px */
+
+/* ---------- 18. 实时刷新状态条 ----------
+   告诉读者"页面会自动更新"，避免他们手动刷新还以为是坏的。
+   颜色沿用现有设计变量，跟着主题走。 */
+.sync-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 12px;
+  padding: 5px 11px;
+  font-size: 0.8rem;
+  line-height: 1.2;
+  color: var(--muted);
+  background: rgba(120, 140, 255, 0.07);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+.sync-status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.65;
+}
+.sync-status.is-live {
+  color: #6ee7a8;
+  border-color: rgba(110, 231, 168, 0.32);
+  background: rgba(110, 231, 168, 0.08);
+}
+.sync-status.is-live::before {
+  opacity: 1;
+  animation: sync-pulse 2.2s ease-out infinite;
+}
+@keyframes sync-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(110, 231, 168, 0.55); }
+  70%      { box-shadow: 0 0 0 6px rgba(110, 231, 168, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sync-status.is-live::before { animation: none; }
+}

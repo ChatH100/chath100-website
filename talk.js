@@ -319,21 +319,35 @@
     return li;
   }
 
-  /* ---------- 整表渲染 ---------- */
-  async function render() {
+  /* ---------- 整表渲染 ----------
+     加入签名比对：实时刷新会频繁调用它，内容没变就不重建 DOM
+     （否则每次无变化的重建都会让读者眼前闪一下）。 */
+  let lastSig = null;
+
+  async function render(opts) {
+    const force = opts && opts.force;
     let items = [];
+    let failed = false;
     try {
       items = await Store.list();
     } catch (err) {
       console.warn(err);
+      failed = true;
       setMsg('读取留言失败：' + err.message, true);
     }
+
+    const sig = failed ? 'ERR' : JSON.stringify(items);
+    if (!force && sig === lastSig) return false;   // 没变化，什么都不做
+    lastSig = sig;
+
+    if (failed) return false;
 
     listEl.textContent = '';
     items.forEach((entry) => listEl.appendChild(buildItem(entry)));
 
     totalEl.textContent = items.length + ' 条';
     emptyEl.hidden = items.length > 0;
+    return true;
   }
 
   /* ---------- 删除 ---------- */
@@ -481,6 +495,228 @@
     }
   }
 
+  /* ==================================================================
+     实时刷新：让"别人发了一条"自动出现在你眼前。
+     两条路，自动选择，不需要额外配置：
+
+       ① Supabase Realtime（WebSocket 推送）—— 真正"立刻"
+          前提：把 messages 表加入 Realtime 发布，SQL 一行：
+            alter publication supabase_realtime add table public.messages;
+          没开也能用，会自动落到 ②。
+
+       ② 智能轮询（默认兜底）—— 通常 5 秒内刷新
+          只查"最新一条的时间戳"，变了才拉全表。
+          没变化时每次只读 1 行，开销很小。
+
+     标签页切到后台时暂停，切回来立刻补一次。
+
+     ⚠️ 判断 Realtime 是否真的生效有个坑（实测踩过）：
+        Supabase 的 phx_join 回复**永远**是 {"status":"ok"}，哪怕订阅被拒。
+        真正的失败在紧随其后的另一帧：
+          {"event":"system","payload":{"status":"error",
+           "message":"Unable to subscribe to changes with given parameters..."}}
+        所以成功依据只能是"phx_reply 里带回了 postgres_changes 订阅信息"，
+        并且要留一个确认窗口，防止把"订阅被拒"误报成"已开启"。
+     ================================================================== */
+  const LIVE = {            /* __liveRefreshInstalled */
+    pollMs: 5000,           // 轮询间隔
+    realtime: false,        // 是否真的建立了推送通道
+    timer: null,
+    ws: null,
+    hb: null,
+    lastNewest: null,
+    busy: false,
+    top: null,
+  };
+
+  function setSyncState(state, text) {
+    if (!LIVE.top) return;
+    LIVE.top.hidden = false;
+    LIVE.top.className = 'sync-status is-' + state;
+    LIVE.top.textContent = text;
+  }
+
+  function ensureStatusEl() {
+    if (LIVE.top || !listEl || !listEl.parentNode) return;
+    const el = document.createElement('p');
+    el.className = 'sync-status';
+    el.hidden = true;
+    el.setAttribute('role', 'status');
+    el.setAttribute('aria-live', 'polite');
+    listEl.parentNode.insertBefore(el, listEl);
+    LIVE.top = el;
+  }
+
+  /* 轻量探测：只取最新一条的时间，用来判断"有没有变化"。
+     无变化时每轮只读 1 行，代价极小。 */
+  async function peek() {
+    const res = await fetch(
+      SUPABASE.url + '/rest/v1/messages?select=time&order=time.desc&limit=1',
+      { headers: sbHeaders() }
+    );
+    if (!res.ok) throw new Error(await readError(res));
+    const rows = await res.json();
+    return { newest: (Array.isArray(rows) && rows.length) ? rows[0].time : 0 };
+  }
+
+  /* 检查一次；有变化才重绘 */
+  async function checkOnce() {
+    if (LIVE.busy || document.hidden) return;
+    if (Store.name !== 'remote') return;
+    LIVE.busy = true;
+    try {
+      const info = await peek();
+      if (info.newest !== LIVE.lastNewest) {
+        LIVE.lastNewest = info.newest;
+        const did = await render();
+        if (did) setSyncState('live', '有新留言，已自动刷新');
+      }
+    } catch (err) {
+      // 网络抖动静默忽略，下一轮再试；不打扰读者
+    } finally {
+      LIVE.busy = false;
+    }
+  }
+
+  function startPolling() {
+    if (LIVE.timer) return;
+    LIVE.timer = window.setInterval(checkOnce, LIVE.pollMs);
+  }
+  function stopPolling() {
+    if (LIVE.timer) { window.clearInterval(LIVE.timer); LIVE.timer = null; }
+  }
+
+  /* phx_reply 里是否真的带回了订阅信息 */
+  function hasSubscription(reply) {
+    try {
+      const r = reply && reply.payload && reply.payload.response;
+      if (!r) return false;
+      if (Array.isArray(r.postgres_changes)) return r.postgres_changes.length > 0;
+      return Boolean(r.postgres_changes) || Boolean(r.subscriptions);
+    } catch (err) { return false; }
+  }
+
+  /* ---------- ① Realtime ---------- */
+  function startRealtime(onFail) {
+    let ws;
+    try {
+      const url = SUPABASE.url.replace(/^http/, 'ws') +
+        '/realtime/v1/websocket?apikey=' + encodeURIComponent(SUPABASE.anonKey) + '&vsn=1.0.0';
+      ws = new WebSocket(url);
+    } catch (err) { onFail(err); return; }
+
+    let settled = false;
+    let joined = false;
+    let errorSeen = false;
+    let confirmTimer = 0;
+
+    const timeout = window.setTimeout(() => fail('timeout'), 8000);
+
+    function fail(why) {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      window.clearTimeout(confirmTimer);
+      try { ws.close(); } catch (e) { /* 忽略 */ }
+      onFail(why);
+    }
+
+    function confirmOk() {
+      if (settled || !joined || errorSeen) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      window.clearTimeout(confirmTimer);
+      LIVE.realtime = true;
+      LIVE.ws = ws;
+      stopPolling();                     // 推送通了就不用轮询了
+      setSyncState('live', '实时刷新已开启');
+      // Realtime 需要定时心跳，否则服务端会断开
+      LIVE.hb = window.setInterval(() => {
+        try { ws.send(JSON.stringify({ topic: 'phoenix', event: 'heartbeat', payload: {}, ref: 'hb' })); } catch (e) { /* 忽略 */ }
+      }, 25000);
+    }
+
+    ws.addEventListener('open', () => {
+      try {
+        ws.send(JSON.stringify({
+          topic: 'realtime:public:messages',
+          event: 'phx_join',
+          payload: {
+            config: {
+              broadcast: { self: false },
+              presence: { key: '' },
+              postgres_changes: [{ event: '*', schema: 'public', table: 'messages' }],
+            },
+          },
+          ref: '1',
+        }));
+      } catch (err) { fail(err); }
+    });
+
+    ws.addEventListener('message', (ev) => {
+      let m;
+      try { m = JSON.parse(ev.data); } catch (err) { return; }
+
+      // 失败信号：订阅被拒 / 服务端报错
+      if (m.event === 'system' && m.payload && m.payload.status === 'error') {
+        errorSeen = true;
+        fail(m.payload.message || 'subscribe-failed');
+        return;
+      }
+
+      if (m.event === 'phx_reply' && m.payload && m.payload.status === 'ok') {
+        if (!hasSubscription(m)) return;   // 回复 ok 但没带订阅信息，等后面的错误帧
+        joined = true;
+        // 600ms 确认窗口：真正的失败帧可能紧随其后。
+        // 宁可晚 0.6 秒显示"已开启"，也不要谎报。
+        if (!confirmTimer) confirmTimer = window.setTimeout(confirmOk, 600);
+        return;
+      }
+
+      // 收到数据变更：直接刷新，省掉一次探测请求
+      if (m.event === 'postgres_changes' || (m.payload && m.payload.data)) {
+        render().then((did) => { if (did) setSyncState('live', '有新留言，已自动刷新'); });
+      }
+    });
+
+    ws.addEventListener('error', () => fail('error'));
+    ws.addEventListener('close', () => {
+      if (!settled) { fail('closed'); return; }
+      // 已建立后断开：静默降级回轮询，读者无感
+      if (LIVE.ws === ws) {
+        LIVE.ws = null;
+        LIVE.realtime = false;
+        if (LIVE.hb) { window.clearInterval(LIVE.hb); LIVE.hb = null; }
+        setSyncState('poll', '已切换为定时刷新');
+        startPolling();
+      }
+    });
+  }
+
+  /* ---------- 启动实时刷新 ----------
+     状态条严格反映真实情况：Realtime 真正生效才显示"已开启"。 */
+  async function startLive() {
+    ensureStatusEl();
+    if (Store.name !== 'remote') { if (LIVE.top) LIVE.top.hidden = true; return; }
+
+    try {
+      const info = await peek();
+      LIVE.lastNewest = info.newest;
+    } catch (err) { /* 探测失败就先空着，下一轮会补上 */ }
+
+    startPolling();                        // 先上兜底，保证一定会有刷新
+    setSyncState('poll', '定时刷新中（约 5 秒）');
+    startRealtime(() => {
+      // Realtime 不可用：轮询继续兜底，状态条不谎报
+      setSyncState('poll', '定时刷新中（约 5 秒）');
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) return;
+      checkOnce();
+    });
+  }
+
   /* ---------- 启动 ---------- */
   (async () => {
     updateCounter();
@@ -488,6 +724,7 @@
     await detectBackend();
     updateNotice();
     syncAdminPanel();      // 必须在 detectBackend 之后，否则不知道是不是连上了
-    await render();
+    await render({ force: true });
+    startLive();           // 启动自动刷新（Realtime 优先，轮询兜底）
   })();
 })();
