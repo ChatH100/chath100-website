@@ -7,8 +7,7 @@
 <meta name="theme-color" content="#05060f" />
 <title>留言板 · ChatH100</title>
 <link rel="icon" type="image/png" href="img/favicon.png" />
-<script src="perf-gate.js"></script>
-<link rel="stylesheet" href="styles.css?v=3" />
+<link rel="stylesheet" href="styles.css?v=6" />
 </head>
 <body>
 
@@ -90,6 +89,19 @@
           <textarea class="gb-textarea" id="gbText" name="text" rows="5"
                     maxlength="300" placeholder="说点什么……" required></textarea>
 
+          <label class="gb-label" for="gbFile">
+            图片<span class="gb-label-opt">可选 · 最大 20 MB · 自动压缩后上传 · jpg / png / gif / webp</span>
+          </label>
+          <div class="gb-file-row">
+            <input class="gb-file" id="gbFile" name="image" type="file"
+                   accept="image/jpeg,image/png,image/gif,image/webp" />
+            <button class="btn btn-ghost gb-file-clear" id="gbFileClear" type="button" hidden>移除</button>
+          </div>
+          <div class="gb-file-preview" id="gbFilePreview" hidden>
+            <img id="gbFileThumb" alt="所选图片预览" />
+          </div>
+          <p class="gb-file-msg" id="gbFileMsg" role="status" aria-live="polite"></p>
+
           <div class="gb-form-foot">
             <span class="gb-counter" id="gbCounter">0 / 300</span>
             <button class="btn btn-primary" type="submit">发布</button>
@@ -137,7 +149,7 @@
   </div>
 </footer>
 
-<script src="script.js?v=3"></script>
-<script src="talk.js?v=3"></script>
+<script src="script.js?v=6"></script>
+<script src="talk.js?v=6"></script>
 </body>
 </html>
