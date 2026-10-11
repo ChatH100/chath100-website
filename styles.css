@@ -1256,3 +1256,79 @@ code {
   .gb-item-image { transition: none; }
   .gb-item-image:hover { transform: none; }
 }
+
+/* ==========================================================================
+   19. 精简模式（html.lite）—— 给核显 / 弱 GPU 的机器
+   ==========================================================================
+
+   什么时候进（判定逻辑在 index.html / talk.html 的 <head> 内联脚本里，
+   必须同步跑，否则会先渲染一帧重效果再切换，肉眼能看见闪一下）：
+     ① 网址带 ?lite=1 强制开 / ?lite=0 强制关（会记在本机）
+     ② 上次判定结果（localStorage: chath100.lite）
+     ③ 系统设置了「减少动态效果」
+     ④ 显卡是核显（Intel UHD / HD Graphics 等）
+     ⑤ 运行中实测帧率过低（script.js 的兜底，覆盖认不出型号的机器）
+
+   这一段和上面第 15 节的 prefers-reduced-motion 目标是同一个：把 GPU
+   合成开销压到最低。区别是精简模式还额外去掉毛玻璃 ——
+   在这类机器上那是最大的一笔开销（14 处 backdrop-filter 全是全屏模糊）。
+
+   ⚠️ 去掉模糊就必须补不透明度。背景是大面积平滑渐变，毛玻璃没了观感
+      几乎不变；但导航条压着正文，不补底色就会叠字重影读不清。
+   -------------------------------------------------------------------------- */
+
+html.lite { scroll-behavior: auto; }
+
+/* 1. 所有动画和过渡直接到终态 */
+html.lite *,
+html.lite *::before,
+html.lite *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}
+
+/* 2. 四层动态背景全停 */
+html.lite .aurora,
+html.lite .grid-drift,
+html.lite .blob { animation: none; }
+
+html.lite .scan-beam,
+html.lite .particles,
+html.lite .noise,
+html.lite .cursor-ball { display: none; }
+
+/* 极光是两层 165vmax 的 blur(70px) 还带 mix-blend-mode，
+   光停动画不够，图层照样在显存里，直接不显示最省。 */
+html.lite .aurora { display: none; }
+
+/* 3. 光斑的模糊半径砍到 30px */
+html.lite .blob { filter: blur(30px); }
+
+/* 4. 视差跟随关掉（每帧都要重算 transform） */
+html.lite .depth { transform: none !important; }
+
+/* 5. 去掉全部毛玻璃 */
+html.lite .glass,
+html.lite .glass-soft,
+html.lite .nav-inner,
+html.lite .nav-links,
+html.lite .btn-ghost,
+html.lite .toast {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* 6. 补回不透明度 —— 这一步不能省 */
+html.lite .glass                { background: rgba(12, 14, 28, 0.90); }
+html.lite .glass-soft           { background: rgba(14, 16, 32, 0.90); }
+html.lite .btn-ghost            { background: rgba(255, 255, 255, 0.09); }
+html.lite .toast                { background: rgba(12, 14, 28, 0.96); }
+html.lite .nav .nav-inner       { background: rgba(12, 13, 28, 0.92); }
+html.lite .nav.is-stuck .nav-inner { background: rgba(9, 10, 24, 0.97); }
+
+/* 7. 入场动画直接给终态，别让元素卡在透明里 */
+html.lite .reveal { opacity: 1 !important; transform: none !important; }
+
+/* 8. 开场遮罩不做动画 */
+html.lite .intro-overlay { display: none; }
