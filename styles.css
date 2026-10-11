@@ -1188,6 +1188,10 @@ code {
   font-size: 0.76rem;
 }
 
+/* .btn 自己设了 display，会盖掉浏览器对 [hidden] 的默认隐藏，
+   所以这里必须显式再关一次，否则「移除」按钮一进页面就露出来。 */
+.gb-file-clear[hidden] { display: none; }
+
 /* ---------- 选中后的缩略预览 ---------- */
 .gb-file-preview {
   margin-top: 10px;
