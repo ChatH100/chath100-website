@@ -50,7 +50,8 @@
   const MAX_EDGE     = 1600;                  // 压缩后最长边的像素数
   const JPEG_QUALITY = 0.85;
 
-  const MAX_IMAGES = 10;                      // 最多保留 10 张图，超了删最旧的
+  const MAX_MESSAGES = 25;                    // 最多保留 25 条留言，超了删最旧的
+  const MAX_IMAGES   = 10;                    // 最多保留 10 张图，超了删最旧的
   const IMAGE_EXT = {
     'image/jpeg': 'jpg',
     'image/png':  'png',
@@ -241,27 +242,48 @@
     return { path: path, before: file.size, after: out.blob.size, skipped: out.skipped };
   }
 
-  /* ---------- 图片上限：只留最新 10 张 ----------
-     为什么要前端来删：Supabase 明确要求删除存储对象必须走 Storage API，
-     用 SQL 删 storage.objects 只会留下孤儿文件（照样占空间，还更难清理）。
-     服务端的 RLS 策略把删除权限锁死在「当前最旧的那一张」，
-     所以就算有人直接调这个接口，也删不掉别人的图。 */
-  async function trimOldestImage() {
+  /* ---------- 腾位：两个滚动窗口 ----------
+     ① 留言最多 MAX_MESSAGES 条 —— 数据库触发器负责删行
+     ② 图片最多 MAX_IMAGES 张   —— 数据库触发器负责把 image_path 置空
+
+     触发器删不掉真实文件：Supabase 明确要求存储对象只能走 Storage API，
+     用 SQL 删 storage.objects 只会留下孤儿文件（照样占空间，还更难清）。
+     所以带图的那条被挤出去之前，必须由这里先把文件删掉。
+
+     每次发帖最多只需要删一个文件，两种情况指向的是同一个：
+       · 留言超限时，被挤掉的是最旧那条。它带图的话，那张正好就是「最旧的图」。
+       · 图片超限时，要删的同样是「最旧的图」。
+     服务端的 RLS 策略只允许删「当前最旧的那一张」，正好对上。 */
+  async function makeRoom() {
     let items;
     try {
       items = await Store.list();
     } catch (err) {
       return null;           // 读不到列表就不清理，别因此阻断发帖
     }
+    if (!items.length) return null;
 
-    const withImg = items.filter((m) => m.image_path);
-    if (withImg.length < MAX_IMAGES) return null;
+    // list() 按时间倒序：items[0] 最新，最后一条最旧
+    const withImg   = items.filter((m) => m.image_path);
+    const oldestMsg = items[items.length - 1];
+    const oldestImg = withImg[withImg.length - 1];
 
-    // list() 是按时间倒序的，最后一条就是最旧的
-    const oldest = withImg[withImg.length - 1];
+    let target = null;
+    let reason = '';
+
+    if (items.length >= MAX_MESSAGES && oldestMsg.image_path) {
+      // 最旧那条留言会被数据库删掉，它的图刚好就是最旧的图，一次解决两件事
+      target = oldestMsg.image_path;
+      reason = '留言已达 ' + MAX_MESSAGES + ' 条上限';
+    } else if (withImg.length >= MAX_IMAGES) {
+      target = oldestImg.image_path;
+      reason = '图片已达 ' + MAX_IMAGES + ' 张上限';
+    }
+
+    if (!target) return null;
 
     const res = await fetch(
-      SUPABASE.url + '/storage/v1/object/' + BUCKET + '/' + encodeURIComponent(oldest.image_path),
+      SUPABASE.url + '/storage/v1/object/' + BUCKET + '/' + encodeURIComponent(target),
       {
         method: 'DELETE',
         headers: {
@@ -272,10 +294,11 @@
     );
 
     if (!res.ok) {
-      console.warn('[留言板] 清理最旧图片失败：HTTP ' + res.status);
+      console.warn('[留言板] 清理旧图失败（HTTP ' + res.status + '），继续发帖');
       return null;
     }
-    return oldest.image_path;
+    console.info('[留言板] ' + reason + '，已清理旧图');
+    return target;
   }
 
   /* ==================================================================
@@ -659,12 +682,11 @@
     let fileNote = '';
 
     if (file) {
-      // 先腾位：已经有 10 张就先删掉最旧那张，再传新的
+      // 先腾位：留言满了 25 条、或图片满了 10 张，就先清掉最旧那份
       try {
-        const removed = await trimOldestImage();
-        if (removed) console.info('[留言板] 已达 ' + MAX_IMAGES + ' 张上限，已清理最旧的一张');
+        await makeRoom();
       } catch (err) {
-        console.warn('[留言板] 清理旧图出错，继续发帖：', err);
+        console.warn('[留言板] 清理旧数据出错，继续发帖：', err);
       }
 
       setFileMsg('正在压缩并上传图片……', false);
