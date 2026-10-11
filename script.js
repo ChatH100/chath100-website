@@ -13,20 +13,79 @@
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const finePointer  = window.matchMedia('(pointer: fine)').matches;
 
+  /* 精简模式：由 <head> 里的内联脚本提前判定并给 <html> 加上 .lite。
+     判定依据见那两个 HTML 文件里的注释（网址参数 / 上次结果 / 减少动效 / 显卡型号）。
+     这里只负责「读结果并关掉四层背景」—— CSS 那部分由 styles.css 第 19 节管。 */
+  const LITE = document.documentElement.classList.contains('lite');
+
   /* ==================================================================
      动态背景开关
      不想要哪一层，把对应项改成 false 就行，例如 particles: false。
-     “减少动效”偏好下会自动全部关掉。
+     “减少动效”偏好下会自动全部关掉；精简模式下也全部关掉。
      ================================================================== */
   const BG = {
-    aurora:          true,    // 极光：两层反向旋转的锥形渐变
-    parallax:        true,    // 光斑随光标产生视差
-    grid:            true,    // 流动网格 + 扫描光束
-    particles:       true,    // canvas 粒子星网
+    aurora:          !LITE,   // 极光：两层反向旋转的锥形渐变
+    parallax:        !LITE,   // 光斑随光标产生视差
+    grid:            !LITE,   // 流动网格 + 扫描光束
+    particles:       !LITE,   // canvas 粒子星网
     particleDensity: 22000,   // 多少像素一个粒子，越大越稀疏
     particleMax:     90,      // 粒子上限（性能保护）
     linkDistance:    132,     // 多近才连线
   };
+
+  /* ---------------------------------------------------------------- 帧率兜底
+     显卡型号认不出来的机器（显卡字符串被浏览器屏蔽、或者是块我们没列进
+     名单的弱 GPU）只能靠实测。开场量 2.5 秒，平均帧率低于 40 判定为带不动，
+     记在本机并重载一次 —— 重载是为了让 <head> 里的判定脚本一上来就给
+     <html> 加上 .lite，比运行到一半再降级干净得多。
+
+     只在「整个测量期间页面都可见」时才下结论：切到后台时浏览器会把
+     requestAnimationFrame 压到 1fps，那测出来的低帧率是假的。 */
+  (function watchFrameRate() {
+    if (LITE) return;                                   // 已经是精简模式，不用测
+
+    // 网址显式指定过就尊重用户选择，不再自动降级
+    try {
+      const q = new URLSearchParams(location.search).get('lite');
+      if (q === '0' || q === '1') return;
+    } catch (e) { /* 拿不到就当没指定 */ }
+
+    try {
+      if (sessionStorage.getItem('chath100.fpsChecked')) return;   // 本次会话测过
+    } catch (e) { return; }
+
+    let frames = 0;
+    let start = 0;
+    let hidden = document.visibilityState !== 'visible';
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') hidden = true;
+    });
+
+    function tick(now) {
+      if (!start) start = now;
+      frames++;
+
+      const elapsed = now - start;
+      if (elapsed < 2500) { requestAnimationFrame(tick); return; }
+
+      try { sessionStorage.setItem('chath100.fpsChecked', '1'); } catch (e) {}
+
+      if (hidden) { console.info('[性能] 测量期间页面被切走，跳过帧率判定'); return; }
+
+      const fps = frames / (elapsed / 1000);
+      if (fps < 40) {
+        console.info('[性能] 实测 ' + fps.toFixed(1) + ' fps，低于 40，切到精简模式并重载');
+        try { localStorage.setItem('chath100.lite', '1'); } catch (e) {}
+        window.location.reload();
+      } else {
+        console.info('[性能] 实测 ' + fps.toFixed(1) + ' fps，保持完整体验');
+        try { localStorage.setItem('chath100.lite', '0'); } catch (e) {}
+      }
+    }
+
+    requestAnimationFrame(tick);
+  })();
 
   /* ---------------------------------------------------------------- 开场分屏 */
   (function intro() {
