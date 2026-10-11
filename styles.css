@@ -1121,43 +1121,134 @@ code {
 .icon-btn::after     { height: 7px; }   /* 上浮 3px，余量 4px */
 .contact-card::after { height: 9px; }   /* 上浮 5px，余量 4px */
 
-/* ---------- 18. 实时刷新状态条 ----------
-   告诉读者"页面会自动更新"，避免他们手动刷新还以为是坏的。
-   颜色沿用现有设计变量，跟着主题走。 */
-.sync-status {
-  display: inline-flex;
+
+/* ==========================================================================
+   18. 留言附图
+   ========================================================================== */
+
+.gb-label-opt {
+  margin-left: 7px;
+  font-weight: 400;
+  font-size: 0.74rem;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--dim);
+}
+
+/* ---------- 选择区 ---------- */
+.gb-file-row {
+  display: flex;
   align-items: center;
-  gap: 7px;
-  margin: 0 0 12px;
-  padding: 5px 11px;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.gb-file {
+  flex: 1 1 190px;
+  min-width: 0;
+  padding: 9px 12px;
+  font: inherit;
   font-size: 0.8rem;
-  line-height: 1.2;
   color: var(--muted);
-  background: rgba(120, 140, 255, 0.07);
+  background: rgba(6, 7, 18, 0.45);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  transition: border-color 0.3s var(--ease), background-color 0.3s var(--ease);
+}
+
+.gb-file:hover:not(:disabled) {
+  border-color: rgba(124, 108, 255, 0.6);
+  background: rgba(119, 35, 255, 0.09);
+}
+
+.gb-file:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* 原生「选择文件」按钮，统一成站内配色 */
+.gb-file::file-selector-button {
+  margin-right: 10px;
+  padding: 5px 13px;
+  font: inherit;
+  font-size: 0.76rem;
+  color: var(--text);
+  background: rgba(119, 35, 255, 0.3);
+  border: 0;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background-color 0.2s var(--ease);
+}
+
+.gb-file::file-selector-button:hover { background: rgba(119, 35, 255, 0.48); }
+
+.gb-file-clear {
+  flex: 0 0 auto;
+  padding: 7px 15px;
+  font-size: 0.76rem;
+}
+
+/* ---------- 选中后的缩略预览 ---------- */
+.gb-file-preview {
+  margin-top: 10px;
+  padding: 6px;
+  max-width: 180px;
+  background: rgba(0, 0, 0, 0.25);
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
 }
-.sync-status::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: 0.65;
+
+.gb-file-preview[hidden] { display: none; }
+
+.gb-file-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 150px;
+  object-fit: contain;
+  border-radius: 9px;
 }
-.sync-status.is-live {
-  color: #6ee7a8;
-  border-color: rgba(110, 231, 168, 0.32);
-  background: rgba(110, 231, 168, 0.08);
+
+.gb-file-msg {
+  min-height: 1.3em;
+  margin-top: 7px;
+  font-size: 0.78rem;
+  color: var(--dim);
 }
-.sync-status.is-live::before {
-  opacity: 1;
-  animation: sync-pulse 2.2s ease-out infinite;
+
+.gb-file-msg.is-error { color: #ff8296; }
+
+/* ---------- 列表里的附图 ----------
+   不裁剪：max-width 和 max-height 同时限制，等比缩放到框内。
+   用 object-fit: cover 会把图裁掉一块，留言照片不该被裁。 */
+.gb-item-image {
+  display: inline-block;
+  margin: 11px 0 2px;
+  padding: 5px;
+  max-width: 340px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  transition: border-color 0.3s var(--ease), transform 0.35s var(--ease);
 }
-@keyframes sync-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(110, 231, 168, 0.55); }
-  70%      { box-shadow: 0 0 0 6px rgba(110, 231, 168, 0); }
+
+.gb-item-image[hidden] { display: none; }
+
+.gb-item-image:hover {
+  border-color: var(--line-str);
+  transform: translateY(-2px);
 }
+
+.gb-item-image img {
+  display: block;
+  max-width: 100%;
+  max-height: 320px;
+  width: auto;
+  height: auto;
+  border-radius: 10px;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .sync-status.is-live::before { animation: none; }
+  .gb-item-image { transition: none; }
+  .gb-item-image:hover { transform: none; }
 }
