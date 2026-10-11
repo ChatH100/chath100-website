@@ -33,6 +33,32 @@
   };
 
   /* ==================================================================
+     图片上传
+     只允许 4 种图片，故意排除 svg —— svg 能内嵌 JavaScript，
+     直接打开公开链接会在浏览器里执行脚本，是典型的存储型 XSS 载体。
+     服务端（存储桶的 allowed_mime_types）会按同一份白名单再拦一道，
+     所以前端这层就算被绕过，也放不进来奇怪的东西。
+     ================================================================== */
+  const BUCKET = 'guestbook-images';
+
+  /* 你可以选最大 20 MB 的源文件，浏览器会先缩小再上传。
+     这样做省的是【流量】不是【容量】：留言板每次打开都要下载全部图片，
+     存 10 张 20 MB 原图的话，一次访问就是 200 MB，免费额度撑不了几次。 */
+  const MAX_SOURCE   = 20 * 1024 * 1024;      // 允许选择的源文件上限
+  const MAX_UPLOAD   = 5 * 1024 * 1024;       // 压缩后仍不能超过这个，与桶配置一致
+  const MAX_GIF      = 3 * 1024 * 1024;       // GIF 不压缩（会丢动画），单独限小
+  const MAX_EDGE     = 1600;                  // 压缩后最长边的像素数
+  const JPEG_QUALITY = 0.85;
+
+  const MAX_IMAGES = 10;                      // 最多保留 10 张图，超了删最旧的
+  const IMAGE_EXT = {
+    'image/jpeg': 'jpg',
+    'image/png':  'png',
+    'image/gif':  'gif',
+    'image/webp': 'webp',
+  };
+
+  /* ==================================================================
      下面两个函数管「删除密钥」在本机的存取。
      密钥原文永远不离开浏览器，上传到数据库的只有它的 SHA-256。
      ================================================================== */
@@ -87,6 +113,172 @@
   }
 
   /* ==================================================================
+     图片：识别真实类型、上传
+     ================================================================== */
+
+  // 读文件开头几个字节，按「魔数」判断真实类型。
+  // 光信 file.type 不够 —— 把 .exe 改名成 .png，浏览器照样报 image/png。
+  async function sniffImageType(file) {
+    const buf = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+    const at = (i) => buf[i];
+
+    if (buf.length >= 3 && at(0) === 0xFF && at(1) === 0xD8 && at(2) === 0xFF) return 'image/jpeg';
+    if (buf.length >= 8 && at(0) === 0x89 && at(1) === 0x50 && at(2) === 0x4E && at(3) === 0x47 &&
+        at(4) === 0x0D && at(5) === 0x0A && at(6) === 0x1A && at(7) === 0x0A) return 'image/png';
+    if (buf.length >= 4 && at(0) === 0x47 && at(1) === 0x49 && at(2) === 0x46 && at(3) === 0x38) return 'image/gif';
+    if (buf.length >= 12 && at(0) === 0x52 && at(1) === 0x49 && at(2) === 0x46 && at(3) === 0x46 &&
+        at(8) === 0x57 && at(9) === 0x45 && at(10) === 0x42 && at(11) === 0x50) return 'image/webp';
+
+    return null;
+  }
+
+  function readSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';
+    return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+  }
+
+  // 公开读取地址。桶是 public，不需要签名也不需要密钥。
+  function imageUrl(path) {
+    return SUPABASE.url + '/storage/v1/object/public/' + BUCKET + '/' + encodeURIComponent(path);
+  }
+
+  /* ---------- 压缩 ----------
+     在浏览器里把图缩小后重编码再上传。
+     GIF 直接跳过：canvas 会把动图压成静态图，那就毁了。
+     返回的 type 取自【压缩后数据的魔数】，不是我们请求的类型 ——
+     有些浏览器不支持 toBlob('image/webp')，会悄悄返回 PNG。 */
+  async function compressImage(file, srcType) {
+    if (srcType === 'image/gif') {
+      return { blob: file, type: 'image/gif', skipped: true };
+    }
+
+    let bitmap;
+    try {
+      bitmap = await createImageBitmap(file);
+    } catch (err) {
+      throw new Error('这张图浏览器读不了，换一张试试');
+    }
+
+    const scale = Math.min(1, MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+    const w = Math.max(1, Math.round(bitmap.width * scale));
+    const h = Math.max(1, Math.round(bitmap.height * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width  = w;
+    canvas.height = h;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('浏览器不支持图片压缩');
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    if (bitmap.close) bitmap.close();
+
+    // PNG 保持 PNG —— 转成 JPEG 会让透明区域变成黑块
+    const want = (srcType === 'image/png') ? 'image/png' : srcType;
+
+    let blob = await new Promise((res) => canvas.toBlob(res, want, JPEG_QUALITY));
+    if (!blob) throw new Error('图片压缩失败');
+
+    // 压完还是太大就逐步降质量（PNG 降质量没意义，跳过）
+    if (want !== 'image/png') {
+      for (const q of [0.7, 0.6, 0.5, 0.4]) {
+        if (blob.size <= MAX_UPLOAD) break;
+        const again = await new Promise((res) => canvas.toBlob(res, want, q));
+        if (!again || again.size >= blob.size) break;
+        blob = again;
+      }
+    }
+
+    const type = await sniffImageType(blob);
+    if (!type) throw new Error('压缩后不是有效图片，换一张试试');
+
+    return { blob: blob, type: type, skipped: false, w: w, h: h };
+  }
+
+  // 上传成功返回 { path, before, after, skipped }，失败抛错。
+  // 文件名用 UUID 是为了配合数据库那条 check 约束，也避免任何路径穿越。
+  async function uploadImage(file) {
+    const srcType = await sniffImageType(file);
+    if (!srcType) throw new Error('这不是有效的图片，只接受 jpg / png / gif / webp');
+
+    if (srcType === 'image/gif' && file.size > MAX_GIF) {
+      throw new Error('GIF 不能超过 ' + readSize(MAX_GIF) + '（动图不压缩，所以单独限小）');
+    }
+
+    const out = await compressImage(file, srcType);
+
+    if (out.blob.size > MAX_UPLOAD) {
+      throw new Error('压缩后仍有 ' + readSize(out.blob.size) + '，超过上限 ' +
+                      readSize(MAX_UPLOAD) + '，换张小一点的图');
+    }
+
+    const path = window.crypto.randomUUID() + '.' + IMAGE_EXT[out.type];
+
+    // 方便在浏览器控制台核对压缩效果
+    if (out.skipped) {
+      console.info('[留言板] GIF 跳过压缩：' + readSize(file.size));
+    } else {
+      console.info('[留言板] 已压缩：' + readSize(file.size) + ' → ' + readSize(out.blob.size) +
+                   '（' + out.w + '×' + out.h + '）');
+    }
+
+    // 存储接口要的是原始文件体，所以不能复用 sbHeaders（那个会设 JSON）
+    const res = await fetch(
+      SUPABASE.url + '/storage/v1/object/' + BUCKET + '/' + encodeURIComponent(path),
+      {
+        method: 'POST',
+        headers: {
+          apikey: SUPABASE.anonKey,
+          Authorization: 'Bearer ' + SUPABASE.anonKey,
+          'Content-Type': out.type,
+          'x-upsert': 'false',          // 不允许覆盖同名文件
+        },
+        body: out.blob,
+      }
+    );
+    if (!res.ok) throw new Error(await readError(res));
+
+    return { path: path, before: file.size, after: out.blob.size, skipped: out.skipped };
+  }
+
+  /* ---------- 图片上限：只留最新 10 张 ----------
+     为什么要前端来删：Supabase 明确要求删除存储对象必须走 Storage API，
+     用 SQL 删 storage.objects 只会留下孤儿文件（照样占空间，还更难清理）。
+     服务端的 RLS 策略把删除权限锁死在「当前最旧的那一张」，
+     所以就算有人直接调这个接口，也删不掉别人的图。 */
+  async function trimOldestImage() {
+    let items;
+    try {
+      items = await Store.list();
+    } catch (err) {
+      return null;           // 读不到列表就不清理，别因此阻断发帖
+    }
+
+    const withImg = items.filter((m) => m.image_path);
+    if (withImg.length < MAX_IMAGES) return null;
+
+    // list() 是按时间倒序的，最后一条就是最旧的
+    const oldest = withImg[withImg.length - 1];
+
+    const res = await fetch(
+      SUPABASE.url + '/storage/v1/object/' + BUCKET + '/' + encodeURIComponent(oldest.image_path),
+      {
+        method: 'DELETE',
+        headers: {
+          apikey: SUPABASE.anonKey,
+          Authorization: 'Bearer ' + SUPABASE.anonKey,
+        },
+      }
+    );
+
+    if (!res.ok) {
+      console.warn('[留言板] 清理最旧图片失败：HTTP ' + res.status);
+      return null;
+    }
+    return oldest.image_path;
+  }
+
+  /* ==================================================================
      存储层 ①：Supabase（PostgREST）
        GET    /rest/v1/messages?select=...
        POST   /rest/v1/messages
@@ -97,7 +289,7 @@
 
     async list() {
       const res = await fetch(
-        SUPABASE.url + '/rest/v1/messages?select=id,name,text,time&order=time.desc&limit=500',
+        SUPABASE.url + '/rest/v1/messages?select=id,name,text,time,image_path&order=time.desc&limit=500',
         { headers: sbHeaders() }
       );
       if (!res.ok) throw new Error(await readError(res));
@@ -114,6 +306,7 @@
           name: entry.name,
           text: entry.text,
           key_hash: await sha256hex(deleteKey),
+          image_path: entry.imagePath || null,
         }),
       });
       if (!res.ok) throw new Error(await readError(res));
@@ -201,6 +394,11 @@
   const tokenEl    = $('#gbAdminToken');
   const clearEl    = $('#gbAdminClear');
   const adminMsgEl = $('#gbAdminMsg');
+  const fileEl      = $('#gbFile');
+  const fileClearEl = $('#gbFileClear');
+  const filePrevEl  = $('#gbFilePreview');
+  const fileThumbEl = $('#gbFileThumb');
+  const fileMsgEl   = $('#gbFileMsg');
 
   let Store = LocalStore;
   let adminToken = '';
@@ -251,16 +449,21 @@
   }
 
   function updateNotice() {
+    // 本地存储模式下不能传图片（没有服务端可存）
+    const remote = Store.name === 'remote';
+    if (fileEl) fileEl.disabled = !remote;
+    if (fileClearEl && !remote) fileClearEl.hidden = true;
+
     if (!noticeEl) return;
-    if (Store.name === 'remote') {
+    if (remote) {
       noticeEl.className = 'notice notice-ok';
       noticeEl.textContent =
-        '已连接服务器：所有访客都能看到。' +
-        '「删除」只能删你自己发的那几条。';
+        '已连接数据库：留言保存在 Supabase 上，所有访客都能看到。' +
+        '「删除」只能删你自己发的那几条（密钥存在本机浏览器里，服务器上只有哈希）。';
     } else {
       noticeEl.className = 'notice';
       noticeEl.textContent =
-        '未连接到服务器，别人看不到。' +
+        '这一版是本地存储：留言只存在你自己浏览器里，别人看不到。' +
         '连不上数据库时会自动退回这个模式。';
     }
   }
@@ -303,6 +506,22 @@
     body.appendChild(head);
     body.appendChild(text);
 
+    if (entry.image_path) {
+      const fig = document.createElement('figure');
+      fig.className = 'gb-item-image';
+
+      const img = document.createElement('img');
+      img.src = imageUrl(entry.image_path);
+      img.alt = entry.name + ' 发的图片';
+      img.loading = 'lazy';
+      img.decoding = 'async';
+      // 图挂了就把整块收起来，别留个破图标占地方
+      img.addEventListener('error', () => { fig.hidden = true; }, { once: true });
+
+      fig.appendChild(img);
+      body.appendChild(fig);
+    }
+
     li.appendChild(avatar);
     li.appendChild(body);
 
@@ -319,35 +538,21 @@
     return li;
   }
 
-  /* ---------- 整表渲染 ----------
-     加入签名比对：实时刷新会频繁调用它，内容没变就不重建 DOM
-     （否则每次无变化的重建都会让读者眼前闪一下）。 */
-  let lastSig = null;
-
-  async function render(opts) {
-    const force = opts && opts.force;
+  /* ---------- 整表渲染 ---------- */
+  async function render() {
     let items = [];
-    let failed = false;
     try {
       items = await Store.list();
     } catch (err) {
       console.warn(err);
-      failed = true;
       setMsg('读取留言失败：' + err.message, true);
     }
-
-    const sig = failed ? 'ERR' : JSON.stringify(items);
-    if (!force && sig === lastSig) return false;   // 没变化，什么都不做
-    lastSig = sig;
-
-    if (failed) return false;
 
     listEl.textContent = '';
     items.forEach((entry) => listEl.appendChild(buildItem(entry)));
 
     totalEl.textContent = items.length + ' 条';
     emptyEl.hidden = items.length > 0;
-    return true;
   }
 
   /* ---------- 删除 ---------- */
@@ -365,6 +570,65 @@
     }
   }
 
+  /* ---------- 图片选择：预览与校验 ---------- */
+  function setFileMsg(text, isError) {
+    if (!fileMsgEl) return;
+    fileMsgEl.textContent = text || '';
+    fileMsgEl.classList.toggle('is-error', Boolean(isError));
+  }
+
+  let thumbUrl = '';
+
+  function resetFile() {
+    if (fileEl) fileEl.value = '';
+    if (thumbUrl) { URL.revokeObjectURL(thumbUrl); thumbUrl = ''; }
+    if (filePrevEl)  filePrevEl.hidden = true;
+    if (fileThumbEl) fileThumbEl.removeAttribute('src');
+    if (fileClearEl) fileClearEl.hidden = true;
+    setFileMsg('', false);
+  }
+
+  if (fileEl) {
+    fileEl.addEventListener('change', async () => {
+      const file = fileEl.files && fileEl.files[0];
+      if (!file) { resetFile(); return; }
+
+      if (file.size > MAX_SOURCE) {
+        const m = '图片太大（' + readSize(file.size) + '），最大 ' + readSize(MAX_SOURCE);
+        resetFile();
+        setFileMsg(m, true);
+        return;
+      }
+
+      // 看魔数判断真实类型，不看扩展名
+      const type = await sniffImageType(file);
+      if (!type) {
+        resetFile();
+        setFileMsg('这不是有效的图片，只接受 jpg / png / gif / webp', true);
+        return;
+      }
+
+      if (type === 'image/gif' && file.size > MAX_GIF) {
+        resetFile();
+        setFileMsg('GIF 不能超过 ' + readSize(MAX_GIF) + '（动图不压缩，所以单独限小）', true);
+        return;
+      }
+
+      if (thumbUrl) URL.revokeObjectURL(thumbUrl);
+      thumbUrl = URL.createObjectURL(file);
+      if (fileThumbEl) fileThumbEl.src = thumbUrl;
+      if (filePrevEl)  filePrevEl.hidden = false;
+      if (fileClearEl) fileClearEl.hidden = false;
+
+      const note = (type === 'image/gif')
+        ? '动图，原样上传'
+        : '上传前会压到最长边 ' + MAX_EDGE + 'px';
+      setFileMsg('已选：' + (file.name || '图片') + ' · ' + readSize(file.size) + ' · ' + note, false);
+    });
+  }
+
+  if (fileClearEl) fileClearEl.addEventListener('click', resetFile);
+
   /* ---------- 提交 ---------- */
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -374,6 +638,8 @@
 
     if (!name) { markInvalid(nameEl, '写个昵称吧，随便什么都行。'); return; }
     if (!content) { markInvalid(textEl, '留言还没写呢。'); return; }
+
+    const file = (fileEl && fileEl.files) ? fileEl.files[0] : null;
 
     const entry = {
       id:   newId(),
@@ -385,6 +651,37 @@
     const btn = form.querySelector('button[type="submit"]');
     if (btn) btn.disabled = true;
 
+    /* 先传图，再发留言。顺序不能反：
+       匿名用户没有 UPDATE 权限，留言一旦发出去就改不了了。
+       所以「先发留言再传图」如果图失败，会留下一条永远没有图的留言；
+       而「先传图再发留言」最坏只留下一个孤儿文件（≤3MB），
+       由管理员偶尔清一下桶就行。两害相权取其轻。 */
+    let fileNote = '';
+
+    if (file) {
+      // 先腾位：已经有 10 张就先删掉最旧那张，再传新的
+      try {
+        const removed = await trimOldestImage();
+        if (removed) console.info('[留言板] 已达 ' + MAX_IMAGES + ' 张上限，已清理最旧的一张');
+      } catch (err) {
+        console.warn('[留言板] 清理旧图出错，继续发帖：', err);
+      }
+
+      setFileMsg('正在压缩并上传图片……', false);
+      try {
+        const up = await uploadImage(file);
+        entry.imagePath = up.path;
+        fileNote = up.skipped
+          ? '（图片 ' + readSize(up.after) + '）'
+          : '（图片已压缩：' + readSize(up.before) + ' → ' + readSize(up.after) + '）';
+      } catch (err) {
+        console.warn(err);
+        setFileMsg('图片上传失败：' + err.message, true);
+        if (btn) btn.disabled = false;
+        return;
+      }
+    }
+
     try {
       await Store.add(entry);
     } catch (err) {
@@ -395,10 +692,11 @@
     }
 
     form.reset();
+    resetFile();
     updateCounter();
     nameEl.removeAttribute('aria-invalid');
     textEl.removeAttribute('aria-invalid');
-    setMsg('发布成功，谢谢留言。', false);
+    setMsg('发布成功，谢谢留言。' + (fileNote ? ' ' + fileNote : ''), false);
     if (btn) btn.disabled = false;
     await render();
   });
@@ -495,228 +793,6 @@
     }
   }
 
-  /* ==================================================================
-     实时刷新：让"别人发了一条"自动出现在你眼前。
-     两条路，自动选择，不需要额外配置：
-
-       ① Supabase Realtime（WebSocket 推送）—— 真正"立刻"
-          前提：把 messages 表加入 Realtime 发布，SQL 一行：
-            alter publication supabase_realtime add table public.messages;
-          没开也能用，会自动落到 ②。
-
-       ② 智能轮询（默认兜底）—— 通常 5 秒内刷新
-          只查"最新一条的时间戳"，变了才拉全表。
-          没变化时每次只读 1 行，开销很小。
-
-     标签页切到后台时暂停，切回来立刻补一次。
-
-     ⚠️ 判断 Realtime 是否真的生效有个坑（实测踩过）：
-        Supabase 的 phx_join 回复**永远**是 {"status":"ok"}，哪怕订阅被拒。
-        真正的失败在紧随其后的另一帧：
-          {"event":"system","payload":{"status":"error",
-           "message":"Unable to subscribe to changes with given parameters..."}}
-        所以成功依据只能是"phx_reply 里带回了 postgres_changes 订阅信息"，
-        并且要留一个确认窗口，防止把"订阅被拒"误报成"已开启"。
-     ================================================================== */
-  const LIVE = {            /* __liveRefreshInstalled */
-    pollMs: 5000,           // 轮询间隔
-    realtime: false,        // 是否真的建立了推送通道
-    timer: null,
-    ws: null,
-    hb: null,
-    lastNewest: null,
-    busy: false,
-    top: null,
-  };
-
-  function setSyncState(state, text) {
-    if (!LIVE.top) return;
-    LIVE.top.hidden = false;
-    LIVE.top.className = 'sync-status is-' + state;
-    LIVE.top.textContent = text;
-  }
-
-  function ensureStatusEl() {
-    if (LIVE.top || !listEl || !listEl.parentNode) return;
-    const el = document.createElement('p');
-    el.className = 'sync-status';
-    el.hidden = true;
-    el.setAttribute('role', 'status');
-    el.setAttribute('aria-live', 'polite');
-    listEl.parentNode.insertBefore(el, listEl);
-    LIVE.top = el;
-  }
-
-  /* 轻量探测：只取最新一条的时间，用来判断"有没有变化"。
-     无变化时每轮只读 1 行，代价极小。 */
-  async function peek() {
-    const res = await fetch(
-      SUPABASE.url + '/rest/v1/messages?select=time&order=time.desc&limit=1',
-      { headers: sbHeaders() }
-    );
-    if (!res.ok) throw new Error(await readError(res));
-    const rows = await res.json();
-    return { newest: (Array.isArray(rows) && rows.length) ? rows[0].time : 0 };
-  }
-
-  /* 检查一次；有变化才重绘 */
-  async function checkOnce() {
-    if (LIVE.busy || document.hidden) return;
-    if (Store.name !== 'remote') return;
-    LIVE.busy = true;
-    try {
-      const info = await peek();
-      if (info.newest !== LIVE.lastNewest) {
-        LIVE.lastNewest = info.newest;
-        const did = await render();
-        if (did) setSyncState('live', '有新留言，已自动刷新');
-      }
-    } catch (err) {
-      // 网络抖动静默忽略，下一轮再试；不打扰读者
-    } finally {
-      LIVE.busy = false;
-    }
-  }
-
-  function startPolling() {
-    if (LIVE.timer) return;
-    LIVE.timer = window.setInterval(checkOnce, LIVE.pollMs);
-  }
-  function stopPolling() {
-    if (LIVE.timer) { window.clearInterval(LIVE.timer); LIVE.timer = null; }
-  }
-
-  /* phx_reply 里是否真的带回了订阅信息 */
-  function hasSubscription(reply) {
-    try {
-      const r = reply && reply.payload && reply.payload.response;
-      if (!r) return false;
-      if (Array.isArray(r.postgres_changes)) return r.postgres_changes.length > 0;
-      return Boolean(r.postgres_changes) || Boolean(r.subscriptions);
-    } catch (err) { return false; }
-  }
-
-  /* ---------- ① Realtime ---------- */
-  function startRealtime(onFail) {
-    let ws;
-    try {
-      const url = SUPABASE.url.replace(/^http/, 'ws') +
-        '/realtime/v1/websocket?apikey=' + encodeURIComponent(SUPABASE.anonKey) + '&vsn=1.0.0';
-      ws = new WebSocket(url);
-    } catch (err) { onFail(err); return; }
-
-    let settled = false;
-    let joined = false;
-    let errorSeen = false;
-    let confirmTimer = 0;
-
-    const timeout = window.setTimeout(() => fail('timeout'), 8000);
-
-    function fail(why) {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(timeout);
-      window.clearTimeout(confirmTimer);
-      try { ws.close(); } catch (e) { /* 忽略 */ }
-      onFail(why);
-    }
-
-    function confirmOk() {
-      if (settled || !joined || errorSeen) return;
-      settled = true;
-      window.clearTimeout(timeout);
-      window.clearTimeout(confirmTimer);
-      LIVE.realtime = true;
-      LIVE.ws = ws;
-      stopPolling();                     // 推送通了就不用轮询了
-      setSyncState('live', '实时刷新已开启');
-      // Realtime 需要定时心跳，否则服务端会断开
-      LIVE.hb = window.setInterval(() => {
-        try { ws.send(JSON.stringify({ topic: 'phoenix', event: 'heartbeat', payload: {}, ref: 'hb' })); } catch (e) { /* 忽略 */ }
-      }, 25000);
-    }
-
-    ws.addEventListener('open', () => {
-      try {
-        ws.send(JSON.stringify({
-          topic: 'realtime:public:messages',
-          event: 'phx_join',
-          payload: {
-            config: {
-              broadcast: { self: false },
-              presence: { key: '' },
-              postgres_changes: [{ event: '*', schema: 'public', table: 'messages' }],
-            },
-          },
-          ref: '1',
-        }));
-      } catch (err) { fail(err); }
-    });
-
-    ws.addEventListener('message', (ev) => {
-      let m;
-      try { m = JSON.parse(ev.data); } catch (err) { return; }
-
-      // 失败信号：订阅被拒 / 服务端报错
-      if (m.event === 'system' && m.payload && m.payload.status === 'error') {
-        errorSeen = true;
-        fail(m.payload.message || 'subscribe-failed');
-        return;
-      }
-
-      if (m.event === 'phx_reply' && m.payload && m.payload.status === 'ok') {
-        if (!hasSubscription(m)) return;   // 回复 ok 但没带订阅信息，等后面的错误帧
-        joined = true;
-        // 600ms 确认窗口：真正的失败帧可能紧随其后。
-        // 宁可晚 0.6 秒显示"已开启"，也不要谎报。
-        if (!confirmTimer) confirmTimer = window.setTimeout(confirmOk, 600);
-        return;
-      }
-
-      // 收到数据变更：直接刷新，省掉一次探测请求
-      if (m.event === 'postgres_changes' || (m.payload && m.payload.data)) {
-        render().then((did) => { if (did) setSyncState('live', '有新留言，已自动刷新'); });
-      }
-    });
-
-    ws.addEventListener('error', () => fail('error'));
-    ws.addEventListener('close', () => {
-      if (!settled) { fail('closed'); return; }
-      // 已建立后断开：静默降级回轮询，读者无感
-      if (LIVE.ws === ws) {
-        LIVE.ws = null;
-        LIVE.realtime = false;
-        if (LIVE.hb) { window.clearInterval(LIVE.hb); LIVE.hb = null; }
-        setSyncState('poll', '已切换为定时刷新');
-        startPolling();
-      }
-    });
-  }
-
-  /* ---------- 启动实时刷新 ----------
-     状态条严格反映真实情况：Realtime 真正生效才显示"已开启"。 */
-  async function startLive() {
-    ensureStatusEl();
-    if (Store.name !== 'remote') { if (LIVE.top) LIVE.top.hidden = true; return; }
-
-    try {
-      const info = await peek();
-      LIVE.lastNewest = info.newest;
-    } catch (err) { /* 探测失败就先空着，下一轮会补上 */ }
-
-    startPolling();                        // 先上兜底，保证一定会有刷新
-    setSyncState('poll', '定时刷新中（约 5 秒）');
-    startRealtime(() => {
-      // Realtime 不可用：轮询继续兜底，状态条不谎报
-      setSyncState('poll', '定时刷新中（约 5 秒）');
-    });
-
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) return;
-      checkOnce();
-    });
-  }
-
   /* ---------- 启动 ---------- */
   (async () => {
     updateCounter();
@@ -724,7 +800,6 @@
     await detectBackend();
     updateNotice();
     syncAdminPanel();      // 必须在 detectBackend 之后，否则不知道是不是连上了
-    await render({ force: true });
-    startLive();           // 启动自动刷新（Realtime 优先，轮询兜底）
+    await render();
   })();
 })();
