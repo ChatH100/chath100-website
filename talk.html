@@ -7,8 +7,71 @@
 <meta name="theme-color" content="#05060f" />
 <title>留言板 · ChatH100</title>
 <link rel="icon" type="image/png" href="img/favicon.png" />
-<link rel="stylesheet" href="styles.css?v=8" />
-</head>
+<link rel="stylesheet" href="styles.css?v=10" />
+<script>
+/* ==========================================================================
+   精简模式判定 —— 必须放在页面 head 里【同步】执行，不能挪到 script.js。
+   script.js 在页面底部加载，那时浏览器已经渲染过第一帧，
+   用户会看见重效果闪一下才切成精简版。
+
+   判定顺序（任一命中就进精简模式）：
+     ① 网址 ?lite=1 强制开，?lite=0 强制关（会记在本机，方便你自己控制）
+     ② 上次的判定结果
+     ③ 系统设置了「减少动态效果」
+     ④ 显卡是核显（Intel UHD / HD Graphics 之类）
+     ⑤ 运行中实测帧率过低 —— 由 script.js 兜底，覆盖认不出型号的机器
+
+   判定失败一律当完整版。绝不能因为这个脚本出错导致白屏。
+   ========================================================================== */
+(function () {
+  var root = document.documentElement;
+  function goLite() { root.className += ' lite'; }
+
+  try {
+    /* ① 网址参数 */
+    var q = null;
+    try { q = new URLSearchParams(location.search).get('lite'); } catch (e) {}
+    if (q === '1' || q === '0') {
+      try { localStorage.setItem('chath100.lite', q); } catch (e) {}
+      if (q === '1') goLite();
+      return;
+    }
+
+    /* ② 上次的判定结果 */
+    var saved = null;
+    try { saved = localStorage.getItem('chath100.lite'); } catch (e) {}
+    if (saved === '1') { goLite(); return; }
+    if (saved === '0') { return; }
+
+    /* ③ 系统级「减少动态效果」 */
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      goLite();
+      return;
+    }
+
+    /* ④ 显卡型号 */
+    var c = document.createElement('canvas');
+    var gl = c.getContext('webgl') || c.getContext('experimental-webgl');
+    if (!gl) { goLite(); return; }        /* 连 WebGL 都拿不到，肯定弱 */
+
+    var ext = gl.getExtension('WEBGL_debug_renderer_info');
+    var gpu = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) || '') : '';
+    window.__gpu = gpu;
+    console.info('[性能] 显卡：' + (gpu || '(浏览器未提供，可能被隐私设置屏蔽)'));
+
+    /* 核显名单。注意 Iris Xe 不在里面 —— 它比 UHD 强得多，带得动。 */
+    if (/intel.*\b(uhd|hd) graphics|microsoft basic|swiftshader|llvmpipe|software/i.test(gpu)) {
+      console.info('[性能] 识别到核显，启用精简模式');
+      goLite();
+    }
+
+    var lose = gl.getExtension('WEBGL_lose_context');
+    if (lose) lose.loseContext();         /* 立刻释放，别占着显存 */
+  } catch (e) {
+    /* 判定失败就当完整版，不影响正常显示 */
+  }
+})();
+</script></head>
 <body>
 
 <a class="skip-link" href="#main">跳到主要内容</a>
@@ -149,7 +212,7 @@
   </div>
 </footer>
 
-<script src="script.js?v=8"></script>
-<script src="talk.js?v=8"></script>
+<script src="script.js?v=10"></script>
+<script src="talk.js?v=10"></script>
 </body>
 </html>
